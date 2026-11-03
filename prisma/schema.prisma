@@ -1,0 +1,325 @@
+// This is your Prisma schema file
+// Learn more: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─── Enums ───────────────────────────────────────────────────────────────────
+
+enum UserRole {
+  employee
+  manager
+  admin
+  executive
+}
+
+enum SkillCategory {
+  technical
+  soft
+  domain
+  certification
+  tool
+}
+
+enum SkillSource {
+  self
+  manager
+  ai_inferred
+  certification
+  peer
+}
+
+enum TaskStatus {
+  open
+  assigned
+  in_progress
+  review
+  completed
+  cancelled
+}
+
+enum TaskPriority {
+  critical
+  high
+  medium
+  low
+}
+
+enum SkillImportance {
+  must_have
+  nice_to_have
+}
+
+enum ProjectStatus {
+  planning
+  active
+  on_hold
+  completed
+  archived
+}
+
+enum EffortStatus {
+  draft
+  submitted
+  approved
+  rejected
+}
+
+enum BurnoutBand {
+  low
+  medium
+  high
+  critical
+}
+
+enum NotificationType {
+  task_assigned
+  effort_approved
+  burnout_alert
+  skill_suggestion
+  deadline_reminder
+}
+
+// ─── Models ──────────────────────────────────────────────────────────────────
+
+model Department {
+  id        String   @id @default(uuid())
+  name      String   @db.VarChar(200)
+  parentId  String?
+  parent    Department?  @relation("DeptHierarchy", fields: [parentId], references: [id])
+  children  Department[] @relation("DeptHierarchy")
+  headId    String?
+  head      User?        @relation("DeptHead", fields: [headId], references: [id])
+  users     User[]       @relation("DeptUsers")
+  createdAt DateTime @default(now())
+
+  @@map("departments")
+}
+
+model User {
+  id           String    @id @default(uuid())
+  email        String    @unique @db.VarChar(255)
+  passwordHash String    @db.VarChar(255)
+  firstName    String    @db.VarChar(100)
+  lastName     String    @db.VarChar(100)
+  avatarUrl    String?   @db.VarChar(500)
+  role         UserRole  @default(employee)
+  departmentId String?
+  department   Department? @relation("DeptUsers", fields: [departmentId], references: [id])
+  managerId    String?
+  manager      User?     @relation("ReportsTo", fields: [managerId], references: [id])
+  reports      User[]    @relation("ReportsTo")
+  location     String?   @db.VarChar(200)
+  bio          String?
+  isActive     Boolean   @default(true)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  // Relations
+  skills             UserSkill[]
+  tasksCreated       Task[]            @relation("TaskCreatedBy")
+  tasksAssigned      Task[]            @relation("TaskAssignedTo")
+  effortLogs         EffortLog[]
+  effortApprovals    EffortLog[]       @relation("EffortApprovedBy")
+  endorsementsGiven  SkillEndorsement[] @relation("EndorsedBy")
+  burnoutSnapshots   BurnoutSnapshot[]
+  notifications      Notification[]
+  projectsOwned      Project[]
+  auditLogs          AuditLog[]        @relation("AuditActor")
+  deptHead           Department[]      @relation("DeptHead")
+
+  @@index([email])
+  @@index([departmentId])
+  @@index([managerId])
+  @@map("users")
+}
+
+model Skill {
+  id          String        @id @default(uuid())
+  name        String        @db.VarChar(200)
+  slug        String        @unique @db.VarChar(200)
+  category    SkillCategory
+  parentId    String?
+  parent      Skill?        @relation("SkillHierarchy", fields: [parentId], references: [id])
+  children    Skill[]       @relation("SkillHierarchy")
+  description String?
+  isActive    Boolean       @default(true)
+  createdAt   DateTime      @default(now())
+
+  userSkills           UserSkill[]
+  taskRequiredSkills   TaskRequiredSkill[]
+
+  @@index([category])
+  @@map("skills")
+}
+
+model UserSkill {
+  id          String      @id @default(uuid())
+  userId      String
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  skillId     String
+  skill       Skill       @relation(fields: [skillId], references: [id], onDelete: Cascade)
+  proficiency Int         // 1-5
+  source      SkillSource @default(self)
+  verified    Boolean     @default(false)
+  verifiedBy  String?
+  acquiredAt  DateTime?
+  lastUsedAt  DateTime?
+  createdAt   DateTime    @default(now())
+
+  endorsements SkillEndorsement[]
+
+  @@unique([userId, skillId, source])
+  @@index([userId])
+  @@index([skillId])
+  @@map("user_skills")
+}
+
+model SkillEndorsement {
+  id          String    @id @default(uuid())
+  userSkillId String
+  userSkill   UserSkill @relation(fields: [userSkillId], references: [id], onDelete: Cascade)
+  endorsedBy  String
+  endorser    User      @relation("EndorsedBy", fields: [endorsedBy], references: [id])
+  comment     String?
+  createdAt   DateTime  @default(now())
+
+  @@unique([userSkillId, endorsedBy])
+  @@map("skill_endorsements")
+}
+
+model Project {
+  id          String        @id @default(uuid())
+  name        String        @db.VarChar(300)
+  description String?
+  status      ProjectStatus @default(planning)
+  ownerId     String
+  owner       User          @relation(fields: [ownerId], references: [id])
+  startDate   DateTime?
+  endDate     DateTime?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  tasks Task[]
+
+  @@index([ownerId])
+  @@map("projects")
+}
+
+model Task {
+  id             String       @id @default(uuid())
+  projectId      String
+  project        Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  title          String       @db.VarChar(500)
+  description    String?
+  status         TaskStatus   @default(open)
+  priority       TaskPriority @default(medium)
+  estimatedHours Decimal?     @db.Decimal(6, 2)
+  actualHours    Decimal?     @db.Decimal(6, 2)
+  deadline       DateTime?
+  createdById    String
+  createdBy      User         @relation("TaskCreatedBy", fields: [createdById], references: [id])
+  assignedToId   String?
+  assignedTo     User?        @relation("TaskAssignedTo", fields: [assignedToId], references: [id])
+  parentTaskId   String?
+  parentTask     Task?        @relation("Subtasks", fields: [parentTaskId], references: [id])
+  subtasks       Task[]       @relation("Subtasks")
+  matchScore     Decimal?     @db.Decimal(5, 4)
+  matchReason    Json?
+  tags           String[]     @default([])
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  requiredSkills TaskRequiredSkill[]
+  effortLogs     EffortLog[]
+
+  @@index([status])
+  @@index([assignedToId])
+  @@index([projectId])
+  @@map("tasks")
+}
+
+model TaskRequiredSkill {
+  id             String          @id @default(uuid())
+  taskId         String
+  task           Task            @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  skillId        String
+  skill          Skill           @relation(fields: [skillId], references: [id], onDelete: Cascade)
+  minProficiency Int             // 1-5
+  importance     SkillImportance @default(must_have)
+
+  @@unique([taskId, skillId])
+  @@map("task_required_skills")
+}
+
+model EffortLog {
+  id           String       @id @default(uuid())
+  userId       String
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  taskId       String
+  task         Task         @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  date         DateTime     @db.Date
+  hours        Decimal      @db.Decimal(4, 2)
+  notes        String?
+  status       EffortStatus @default(draft)
+  approvedById String?
+  approvedBy   User?        @relation("EffortApprovedBy", fields: [approvedById], references: [id])
+  createdAt    DateTime     @default(now())
+
+  @@unique([userId, taskId, date])
+  @@index([userId, date])
+  @@map("effort_logs")
+}
+
+model BurnoutSnapshot {
+  id                  String      @id @default(uuid())
+  userId              String
+  user                User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  weekStart           DateTime    @db.Date
+  riskScore           Decimal     @db.Decimal(5, 2)
+  riskBand            BurnoutBand
+  contributingFactors Json?
+  modelVersion        String?     @db.VarChar(50)
+  createdAt           DateTime    @default(now())
+
+  @@unique([userId, weekStart])
+  @@index([userId, weekStart])
+  @@map("burnout_snapshots")
+}
+
+model Notification {
+  id        String           @id @default(uuid())
+  userId    String
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      NotificationType
+  title     String           @db.VarChar(200)
+  message   String
+  read      Boolean          @default(false)
+  href      String?
+  createdAt DateTime         @default(now())
+
+  @@index([userId, read])
+  @@map("notifications")
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  actorId    String?
+  actor      User?    @relation("AuditActor", fields: [actorId], references: [id])
+  action     String   @db.VarChar(100)
+  entityType String   @db.VarChar(100)
+  entityId   String
+  oldValues  Json?
+  newValues  Json?
+  ipAddress  String?  @db.VarChar(45)
+  createdAt  DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([actorId, createdAt])
+  @@map("audit_logs")
+}
